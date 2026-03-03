@@ -1,0 +1,186 @@
+# SPARTAN v2.0 — Example Audit Configuration
+# Copy this file, customize it, and pass with: spartan --config audit.yaml
+#
+# Reference: https://github.com/your-org/spartan
+# Shannon integration: Multi-agent parallel analysis, live exploitation PoCs
+
+name: "Example Web App Audit"
+version: "2.0"
+description: "Full-stack security audit of the example.com web application"
+
+# ── Scope ─────────────────────────────────────────────────────────────────────
+scope:
+  # Primary target URL (web app)
+  url: "https://app.example.com"
+
+  # Optional: Source code repository path or GitHub URL
+  repo: "/path/to/source/code"
+  # repo: "https://github.com/example/app"
+
+  # OpenAPI/Swagger schema location (for Schemathesis API fuzzing)
+  # openapi_path: "/openapi.json"
+  # openapi_path: "/v1/swagger.json"
+
+  # DeFi/Web3 specific:
+  # protocol_type: "lending"     # Options: algo-stables, bridge, cdp, dexes, lending,
+  #                              #   liquid-staking, yield-aggregator, staking-pool,
+  #                              #   governance, nft-marketplace, oracle, account-abstraction
+  # contract_addresses:
+  #   - "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"   # USDC
+  #   - "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"   # Uniswap V2 Router
+  # chain_id: 1        # 1=Mainnet, 5=Goerli, 137=Polygon, 42161=Arbitrum
+  # rpc_url: "https://mainnet.infura.io/v3/$INFURA_KEY"
+
+# ── Authentication ────────────────────────────────────────────────────────────
+authentication:
+  # login_type options: none, form, api_key, bearer_token, basic, oauth, web3, totp
+  login_type: "form"
+
+  # For form-based login:
+  login_url: "https://app.example.com/login"
+  username_selector: "#email"
+  password_selector: "#password"
+  submit_selector: "button[type=submit]"
+  success_condition: "url_change"  # url_change | text_present | status_200
+
+  # Use environment variables for credentials (recommended):
+  username: "$SPARTAN_USERNAME"    # Set in .env or shell environment
+  password: "$SPARTAN_PASSWORD"    # NEVER hardcode credentials
+
+  # For API key / bearer token:
+  # login_type: "api_key"
+  # api_key: "$API_KEY"
+  # api_key_header: "Authorization"
+  # api_key_prefix: "Bearer"
+
+  # For HTTP Basic Auth:
+  # login_type: "basic"
+  # basic_user: "$BASIC_USER"
+  # basic_pass: "$BASIC_PASS"
+
+  # For TOTP / 2FA (Google Authenticator, Authy):
+  # totp:
+  #   secret: "$TOTP_SECRET"    # Base32 TOTP seed
+  #   issuer: "example.com"
+  #   digits: 6
+  #   interval: 30
+  # totp_selector: "input[name=otp]"   # CSS selector for OTP input field
+
+  # For complex multi-step login flows (Shannon-style):
+  # login_flow:
+  #   - action: "fill"
+  #     selector: "#email"
+  #     value: "$SPARTAN_USERNAME"
+  #   - action: "click"
+  #     selector: "#next-button"
+  #   - action: "wait"
+  #     wait_ms: 1000
+  #   - action: "fill"
+  #     selector: "#password"
+  #     value: "$SPARTAN_PASSWORD"
+  #   - action: "click"
+  #     selector: "#login-button"
+  #   - action: "wait_for_url"
+  #     value: "/dashboard"
+
+  # For Web3 wallet:
+  # login_type: "web3"
+  # wallet_private_key: "$WALLET_PRIVATE_KEY"
+  # rpc_url: "https://mainnet.infura.io/v3/$INFURA_KEY"
+
+# ── Audit Rules ───────────────────────────────────────────────────────────────
+rules:
+  # Paths to focus testing on (SPARTAN will prioritize these)
+  focus:
+    - "/api/admin"
+    - "/api/users"
+    - "/api/payments"
+    - "/dashboard"
+
+  # Paths to avoid (e.g., logout, destructive operations)
+  avoid:
+    - "/logout"
+    - "/api/admin/delete-all"
+    - "/api/reset-database"
+    - "/terms"
+    - "/privacy"
+
+  # Vulnerability taxonomy to apply:
+  include_owasp_top10: true           # OWASP Top 10 (2021)
+  include_api_security_top10: true    # OWASP API Security Top 10 (2023)
+  include_web3_vulns: false           # Set true for DeFi/smart contract targets
+  include_protocol_vulns: false       # Set true if scope.protocol_type is specified
+
+  # Shannon "No Exploit, No Report" policy:
+  # Only include findings with confirmed PoC evidence in the final report
+  no_exploit_no_report: true
+
+  # Minimum severity to include in report:
+  max_severity_to_report: "LOW"  # CRITICAL | HIGH | MEDIUM | LOW | INFO
+
+  # Custom checklist items (added to analysis phase):
+  # custom_checklist:
+  #   - "Check for insecure file upload handling"
+  #   - "Test for GraphQL introspection abuse"
+  #   - "Verify JWT rotation on sensitive operations"
+
+# ── Pipeline Configuration ────────────────────────────────────────────────────
+pipeline:
+  # Parallel analysis agents (Shannon-style multi-agent vulnerability analysis)
+  # Each agent handles a different OWASP category concurrently
+  max_concurrent_agents: 3
+
+  # Retry failed phase attempts before giving up
+  retry_on_failure: 2
+
+  # Max seconds per analysis phase before timeout
+  timeout_per_phase_seconds: 300
+
+  # Stream output to terminal in real-time
+  stream_output: true
+
+  # Auto-advance through phases without user confirmation (use with caution)
+  auto_advance_phases: false
+
+  # Save session state after each phase
+  save_intermediate: true
+
+  # Retry preset: conservative (few tests) | balanced | aggressive (thorough)
+  retry_preset: "balanced"
+
+# ── Auditor Notes & Context ───────────────────────────────────────────────────
+auditor_notes: >
+  This is a full security audit of the Example app.
+  Focus on authentication flows, payment processing, and admin panel.
+  The API uses JWT HS256 tokens — check for weak secrets and privilege escalation.
+
+# Known areas of concern to investigate specifically:
+known_issues:
+  - "Password reset flow reported as potentially vulnerable to account takeover"
+  - "Admin API endpoint documented in source but not secured per code review"
+  - "File upload feature added in v2.3 without security review"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DeFi EXAMPLE: Lending Protocol Audit
+# Uncomment and adapt for Web3/DeFi targets:
+# ─────────────────────────────────────────────────────────────────────────────
+# name: "DeFi Lending Protocol Audit"
+# scope:
+#   repo: "https://github.com/example/lending-protocol"
+#   protocol_type: "lending"
+#   contract_addresses:
+#     - "0x..."
+#   chain_id: 1
+#   rpc_url: "https://mainnet.infura.io/v3/$INFURA_KEY"
+# authentication:
+#   login_type: "web3"
+#   wallet_private_key: "$AUDIT_WALLET_KEY"
+# rules:
+#   include_web3_vulns: true
+#   include_protocol_vulns: true
+#   focus:
+#     - "contracts/Vault.sol"
+#     - "contracts/LendingPool.sol"
+#   avoid:
+#     - "contracts/mocks/"
+#     - "test/"

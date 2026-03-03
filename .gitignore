@@ -1,0 +1,32 @@
+# SPARTAN — gitignore
+
+# Environment & secrets
+.env
+*.env
+
+# Session data & reports (may contain sensitive findings)
+sessions/
+reports/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

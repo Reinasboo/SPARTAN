@@ -1,0 +1,1 @@
+# SPARTAN Configuration Package

@@ -1,0 +1,15 @@
+# SPARTAN v2.0 — Python Dependencies
+
+# ── LLM Providers (install at least one) ────────────────────────────────────
+openai>=1.30.0          # OpenAI GPT-4 / GPT-4o
+anthropic>=0.28.0       # Anthropic Claude
+
+# ── Core utilities ────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0    # .env file support
+rich>=13.0.0            # Enhanced terminal formatting (optional)
+
+# ── YAML config support ───────────────────────────────────────────────────────
+pyyaml>=6.0             # YAML audit config files (--config flag)
+
+# ── Browser-based PoC generation (optional) ──────────────────────────────────
+# playwright>=1.40.0    # Uncomment + run: playwright install chromium
