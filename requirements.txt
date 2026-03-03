@@ -3,7 +3,7 @@
 # ── LLM Providers (install at least one) ────────────────────────────────────
 openai>=1.30.0                # OpenAI GPT-4 / GPT-4o
 anthropic>=0.28.0             # Anthropic Claude
-google-generativeai>=0.8.0    # Google Gemini
+google-genai>=1.0.0           # Google Gemini (new SDK)
 
 # ── Core utilities ────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0    # .env file support

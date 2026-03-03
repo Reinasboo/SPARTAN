@@ -129,14 +129,15 @@ def _openrouter_chat(messages: list[dict], stream: bool) -> str:
 
 def _gemini_chat(messages: list[dict], stream: bool) -> str:
     try:
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types as genai_types
     except ImportError:
-        raise ImportError("google-generativeai not installed. Run: pip install google-generativeai")
+        raise ImportError("google-genai not installed. Run: pip install google-genai")
 
-    genai.configure(api_key=GEMINI_KEY)
+    client = genai.Client(api_key=GEMINI_KEY)
 
     # Extract system instruction if present
-    system_instruction = None
+    system_instruction: str | None = None
     filtered: list[dict] = []
     for m in messages:
         if m["role"] == "system":
@@ -144,27 +145,28 @@ def _gemini_chat(messages: list[dict], stream: bool) -> str:
         else:
             filtered.append(m)
 
-    model = genai.GenerativeModel(
-        model_name=GEMINI_MODEL,
+    # Convert to Gemini contents format
+    contents = [
+        genai_types.Content(
+            role="user" if m["role"] == "user" else "model",
+            parts=[genai_types.Part.from_text(text=m["content"])],
+        )
+        for m in filtered
+    ]
+
+    config = genai_types.GenerateContentConfig(
+        max_output_tokens=MAX_TOKENS,
+        temperature=TEMPERATURE,
         system_instruction=system_instruction,
-        generation_config=genai.GenerationConfig(
-            max_output_tokens=MAX_TOKENS,
-            temperature=TEMPERATURE,
-        ),
     )
 
-    # Convert message history to Gemini format (all but the last message)
-    history = [
-        {"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]}
-        for m in filtered[:-1]
-    ]
-    chat_session = model.start_chat(history=history)
-    last_message = filtered[-1]["content"] if filtered else ""
-
     if stream:
-        response = chat_session.send_message(last_message, stream=True)
         collected = []
-        for chunk in response:
+        for chunk in client.models.generate_content_stream(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=config,
+        ):
             text = chunk.text
             if text:
                 print(text, end="", flush=True)
@@ -172,7 +174,11 @@ def _gemini_chat(messages: list[dict], stream: bool) -> str:
         print()
         return "".join(collected)
     else:
-        response = chat_session.send_message(last_message)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=config,
+        )
         return response.text or ""
 
 
