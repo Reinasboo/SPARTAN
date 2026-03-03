@@ -85,6 +85,11 @@ Or set environment variables directly:
 $env:OPENAI_API_KEY = "sk-..."
 $env:SPARTAN_LLM_PROVIDER = "openai"
 $env:SPARTAN_LLM_MODEL = "gpt-4o"
+
+# Or use Gemini
+$env:GEMINI_API_KEY = "AIza..."
+$env:SPARTAN_LLM_PROVIDER = "gemini"
+$env:SPARTAN_GEMINI_MODEL = "gemini-2.0-flash"
 ```
 
 ### 3. Run SPARTAN
@@ -104,6 +109,9 @@ python main.py --config audit.yaml
 
 # Use Anthropic Claude
 python main.py --provider anthropic
+
+# Use Google Gemini
+python main.py --provider gemini
 
 # Resume last session
 python main.py --resume
@@ -272,12 +280,14 @@ Controlled via `rules.no_exploit_no_report: true` in the audit config. When enab
 
 | Variable | Default | Description |
 |---|---|---|
-| `SPARTAN_LLM_PROVIDER` | `openai` | LLM provider: `openai` \| `anthropic` \| `openrouter` |
+| `SPARTAN_LLM_PROVIDER` | `openai` | LLM provider: `openai` \| `anthropic` \| `openrouter` \| `gemini` |
 | `SPARTAN_LLM_MODEL` | `gpt-4o` | Model name for OpenAI |
 | `SPARTAN_ANTHROPIC_MODEL` | `claude-opus-4-5` | Model name for Anthropic |
+| `SPARTAN_GEMINI_MODEL` | `gemini-2.0-flash` | Model name for Gemini (`gemini-2.0-flash` \| `gemini-2.5-pro-preview-03-25`) |
 | `OPENAI_API_KEY` | — | OpenAI API key |
 | `ANTHROPIC_API_KEY` | — | Anthropic API key |
 | `OPENROUTER_API_KEY` | — | OpenRouter API key |
+| `GEMINI_API_KEY` | — | Google Gemini API key (get one at [aistudio.google.com](https://aistudio.google.com)) |
 | `SPARTAN_MAX_TOKENS` | `8192` | Max tokens per response |
 | `SPARTAN_TEMPERATURE` | `0.2` | LLM temperature |
 | `SPARTAN_STREAM` | `true` | Stream output in real-time |

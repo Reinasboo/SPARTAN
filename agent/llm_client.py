@@ -1,6 +1,6 @@
 """
 SPARTAN v2.0 — LLM Client
-Multi-provider abstraction: OpenAI, Anthropic, OpenRouter.
+Multi-provider abstraction: OpenAI, Anthropic, OpenRouter, Gemini.
 Supports streaming output.
 """
 
@@ -13,6 +13,7 @@ from config.settings import (
     LLM_PROVIDER, LLM_MODEL, LLM_API_KEY,
     ANTHROPIC_KEY, ANTHROPIC_MODEL,
     OPENROUTER_KEY, OPENROUTER_MODEL,
+    GEMINI_KEY, GEMINI_MODEL,
     MAX_TOKENS, TEMPERATURE, STREAM_OUTPUT,
 )
 
@@ -126,6 +127,55 @@ def _openrouter_chat(messages: list[dict], stream: bool) -> str:
         return response.choices[0].message.content or ""
 
 
+def _gemini_chat(messages: list[dict], stream: bool) -> str:
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        raise ImportError("google-generativeai not installed. Run: pip install google-generativeai")
+
+    genai.configure(api_key=GEMINI_KEY)
+
+    # Extract system instruction if present
+    system_instruction = None
+    filtered: list[dict] = []
+    for m in messages:
+        if m["role"] == "system":
+            system_instruction = m["content"]
+        else:
+            filtered.append(m)
+
+    model = genai.GenerativeModel(
+        model_name=GEMINI_MODEL,
+        system_instruction=system_instruction,
+        generation_config=genai.GenerationConfig(
+            max_output_tokens=MAX_TOKENS,
+            temperature=TEMPERATURE,
+        ),
+    )
+
+    # Convert message history to Gemini format (all but the last message)
+    history = [
+        {"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]}
+        for m in filtered[:-1]
+    ]
+    chat_session = model.start_chat(history=history)
+    last_message = filtered[-1]["content"] if filtered else ""
+
+    if stream:
+        response = chat_session.send_message(last_message, stream=True)
+        collected = []
+        for chunk in response:
+            text = chunk.text
+            if text:
+                print(text, end="", flush=True)
+                collected.append(text)
+        print()
+        return "".join(collected)
+    else:
+        response = chat_session.send_message(last_message)
+        return response.text or ""
+
+
 # ── Public interface ──────────────────────────────────────────────────────────
 
 def chat(messages: list[dict], stream: bool | None = None) -> str:
@@ -143,8 +193,10 @@ def chat(messages: list[dict], stream: bool | None = None) -> str:
         return _anthropic_chat(messages, use_stream)
     elif provider == "openrouter":
         return _openrouter_chat(messages, use_stream)
+    elif provider == "gemini":
+        return _gemini_chat(messages, use_stream)
     else:
-        raise ValueError(f"Unknown LLM provider: {provider}. Set SPARTAN_LLM_PROVIDER to openai|anthropic|openrouter")
+        raise ValueError(f"Unknown LLM provider: {provider}. Set SPARTAN_LLM_PROVIDER to openai|anthropic|openrouter|gemini")
 
 
 def get_active_model() -> str:
@@ -153,4 +205,5 @@ def get_active_model() -> str:
     if provider == "openai":       return f"OpenAI / {LLM_MODEL}"
     elif provider == "anthropic":  return f"Anthropic / {ANTHROPIC_MODEL}"
     elif provider == "openrouter": return f"OpenRouter / {OPENROUTER_MODEL}"
+    elif provider == "gemini":     return f"Gemini / {GEMINI_MODEL}"
     return f"{provider} / unknown"

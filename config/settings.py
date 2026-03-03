@@ -20,16 +20,18 @@ SESSIONS_DIR = BASE_DIR / "sessions"
 REPORTS_DIR  = BASE_DIR / "reports"
 
 # ── LLM Provider ────────────────────────────────────────────
-# Supported: "openai" | "anthropic" | "openrouter"
+# Supported: "openai" | "anthropic" | "openrouter" | "gemini"
 LLM_PROVIDER  = os.getenv("SPARTAN_LLM_PROVIDER", "openai")
 LLM_MODEL     = os.getenv("SPARTAN_LLM_MODEL",    "gpt-4o")
 LLM_API_KEY   = os.getenv("OPENAI_API_KEY",        "")
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY",     "")
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY",   "")
+GEMINI_KEY    = os.getenv("GEMINI_API_KEY",         "")
 
-# Anthropic model alias
-ANTHROPIC_MODEL   = os.getenv("SPARTAN_ANTHROPIC_MODEL", "claude-opus-4-5")
-OPENROUTER_MODEL  = os.getenv("SPARTAN_OPENROUTER_MODEL","anthropic/claude-opus-4-5")
+# Model aliases
+ANTHROPIC_MODEL   = os.getenv("SPARTAN_ANTHROPIC_MODEL",  "claude-opus-4-5")
+OPENROUTER_MODEL  = os.getenv("SPARTAN_OPENROUTER_MODEL", "anthropic/claude-opus-4-5")
+GEMINI_MODEL      = os.getenv("SPARTAN_GEMINI_MODEL",     "gemini-2.0-flash")
 
 # ── Generation parameters ────────────────────────────────────
 MAX_TOKENS    = int(os.getenv("SPARTAN_MAX_TOKENS",  "8192"))
