@@ -10,7 +10,7 @@ try:
     from dotenv import load_dotenv
     _env_path = Path(__file__).resolve().parent.parent / ".env"
     if _env_path.exists():
-        load_dotenv(_env_path)
+        load_dotenv(_env_path, override=True)
 except ImportError:
     pass  # python-dotenv not installed — use system environment vars
 
