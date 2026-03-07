@@ -33,6 +33,16 @@ class Finding:
         poc: str = "",
         raw_report: str = "",
         phase_found: str = "",
+        # ── Evidence fields (P0 anti-hallucination) ──────────────────────
+        file_path: str = "",
+        line_number: int = 0,
+        vulnerable_snippet: str = "",
+        attack_prerequisite: str = "",
+        impact_justification: str = "",
+        # ── Confidence & lifecycle ────────────────────────────────────────
+        confidence: int = 0,          # LLM self-assessed 0-100
+        status: str = "UNCONFIRMED",  # UNCONFIRMED | DRAFT | CONFIRMED | REJECTED
+        rejection_reason: str = "",
     ):
         self.finding_id  = finding_id
         self.title       = title
@@ -48,6 +58,16 @@ class Finding:
         self.phase_found = phase_found
         self.timestamp   = datetime.now(timezone.utc).isoformat()
         self.remediation_status: str = "open"   # open | fixed | residual_risk
+        # Evidence
+        self.file_path           = file_path
+        self.line_number         = line_number
+        self.vulnerable_snippet  = vulnerable_snippet
+        self.attack_prerequisite = attack_prerequisite
+        self.impact_justification = impact_justification
+        # Confidence & lifecycle
+        self.confidence       = confidence
+        self.status           = status
+        self.rejection_reason = rejection_reason
 
     def to_dict(self) -> dict:
         return self.__dict__.copy()
@@ -58,13 +78,29 @@ class Finding:
         f.__dict__.update(data)
         return f
 
+    def has_evidence(self) -> bool:
+        """Return True if the finding has the minimum evidence for confirmation."""
+        return bool(self.file_path or self.vulnerable_snippet or self.line_number)
+
     def one_liner(self) -> str:
         color  = SEVERITY_COLORS.get(self.severity, "")
-        conf   = "" if self.confirmed else " [UNCONFIRMED]"
+        status = getattr(self, "status", "UNCONFIRMED")
+        # Honour legacy confirmed=True bool: if status is still the default but
+        # the boolean flag was explicitly set True, treat as CONFIRMED.
+        if status == "UNCONFIRMED" and getattr(self, "confirmed", False):
+            status = "CONFIRMED"
+        conf_pct = getattr(self, "confidence", 0)
+        status_tag = {
+            "CONFIRMED":   "",
+            "DRAFT":       " [DRAFT]",
+            "REJECTED":    " [REJECTED]",
+            "UNCONFIRMED": " [UNCONFIRMED]",
+        }.get(status, " [UNCONFIRMED]")
+        conf_tag = f" ({conf_pct}%)" if conf_pct else ""
         return (
             f"  {color}{BOLD}{self.finding_id}{RESET_COLOR} — "
             f"{color}{self.severity}{RESET_COLOR} | "
-            f"{self.title}{conf}"
+            f"{self.title}{status_tag}{conf_tag}"
         )
 
 

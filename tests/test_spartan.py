@@ -157,45 +157,125 @@ class TestRegisterFindingManually(unittest.TestCase):
 
 class TestExtractAndRegisterFindings(unittest.TestCase):
 
-    def test_extracts_potential_finding(self):
+    def _make_json_block(self, **kwargs) -> str:
+        import json
+        defaults = {
+            "title": "Reentrancy in withdraw()",
+            "severity": "Critical",
+            "category": "Reentrancy",
+            "file_path": "contracts/Vault.sol",
+            "line_number": 42,
+            "vulnerable_snippet": "token.transfer(msg.sender, amount);\nbalances[msg.sender] -= amount;",
+            "attack_prerequisite": "Attacker must have a balance",
+            "impact_justification": "All funds can be drained",
+            "confidence": 90,
+            "status": "DRAFT",
+        }
+        defaults.update(kwargs)
+        return f"```json\n{json.dumps(defaults)}\n```"
+
+    def test_extracts_json_finding(self):
         agent = _make_agent()
-        response = (
-            "Potential Finding: Reentrancy in withdraw()\n"
-            "Severity: Critical\n"
-            "Class: Reentrancy\n"
-            "Description: Funds can be drained via reentrancy."
+        response = self._make_json_block()
+        agent._extract_and_register_findings(response, "Analysis")
+        self.assertEqual(len(agent.session.findings), 1)
+        self.assertEqual(agent.session.findings[0].title, "Reentrancy in withdraw()")
+
+    def test_rejects_finding_without_evidence(self):
+        agent = _make_agent()
+        import json
+        data = {
+            "title": "Hallucinated Bug",
+            "severity": "Critical",
+            "category": "Reentrancy",
+            # No file_path, line_number, or vulnerable_snippet
+            "confidence": 90,
+            "status": "CONFIRMED",
+        }
+        response = f"```json\n{json.dumps(data)}\n```"
+        agent._extract_and_register_findings(response, "Analysis")
+        self.assertEqual(len(agent.session.findings), 0)  # rejected — no evidence
+
+    def test_no_duplicate_findings_same_file_line(self):
+        agent = _make_agent()
+        response = self._make_json_block(
+            file_path="Vault.sol", line_number=42
         )
         agent._extract_and_register_findings(response, "Analysis")
-        self.assertGreater(len(agent.session.findings), 0)
-        titles = [f.title for f in agent.session.findings]
-        self.assertIn("Reentrancy in withdraw()", titles)
+        agent._extract_and_register_findings(response, "Analysis")
+        # Same file+line → dedup
+        matching = [f for f in agent.session.findings if f.title == "Reentrancy in withdraw()"]
+        self.assertEqual(len(matching), 1)
 
-    def test_extracts_finding_bracket_format(self):
+    def test_no_duplicate_findings_jaccard(self):
         agent = _make_agent()
-        response = (
-            "[FINDING-001] — Price Oracle Manipulation\n"
-            "Severity: High\n"
-            "Category: Oracle\n"
+        r1 = self._make_json_block(
+            title="Reentrancy in withdraw()", file_path="Vault.sol", line_number=10
         )
-        agent._extract_and_register_findings(response, "Analysis")
-        self.assertGreater(len(agent.session.findings), 0)
+        r2 = self._make_json_block(
+            title="Reentrancy in withdraw()", file_path="Vault.sol", line_number=99
+        )
+        agent._extract_and_register_findings(r1, "Analysis")
+        agent._extract_and_register_findings(r2, "Analysis")
+        # Same title → Jaccard dedup kicks in
+        matching = [f for f in agent.session.findings if "Reentrancy" in f.title]
+        self.assertEqual(len(matching), 1)
 
-    def test_no_duplicate_findings(self):
+    def test_draft_status_remains_draft_without_devil_advocate(self):
         agent = _make_agent()
-        response = (
-            "Potential Finding: Reentrancy in withdraw()\n"
-            "Severity: Critical\n"
-        )
+        response = self._make_json_block(status="DRAFT", confidence=70)
         agent._extract_and_register_findings(response, "Analysis")
-        agent._extract_and_register_findings(response, "Analysis")
-        titles = [f.title for f in agent.session.findings if f.title == "Reentrancy in withdraw()"]
-        self.assertEqual(len(titles), 1)
+        self.assertEqual(len(agent.session.findings), 1)
+        self.assertEqual(agent.session.findings[0].status, "DRAFT")
 
-    def test_no_false_finding_from_clean_response(self):
+    def test_confirmed_status_triggers_devil_advocate(self):
+        agent = _make_agent()
+        response = self._make_json_block(status="CONFIRMED", confidence=90)
+        # Mock devil's advocate to return CONFIRMED so finding registers
+        with patch("agent.tools.devil_advocate.devil_advocate_check") as mock_da:
+            from agent.tools.devil_advocate import DevilVerdict
+            mock_da.return_value = DevilVerdict("CONFIRMED", "Looks real", 90)
+            agent._extract_and_register_findings(response, "Analysis")
+        self.assertEqual(len(agent.session.findings), 1)
+        self.assertEqual(agent.session.findings[0].status, "CONFIRMED")
+
+    def test_devil_advocate_rejects_finding(self):
+        agent = _make_agent()
+        response = self._make_json_block(status="CONFIRMED", confidence=90)
+        with patch("agent.tools.devil_advocate.devil_advocate_check") as mock_da:
+            from agent.tools.devil_advocate import DevilVerdict
+            mock_da.return_value = DevilVerdict("REJECTED", "Protected by modifier", 85)
+            agent._extract_and_register_findings(response, "Analysis")
+        # Still registered but as REJECTED
+        self.assertEqual(len(agent.session.findings), 1)
+        self.assertEqual(agent.session.findings[0].status, "REJECTED")
+
+    def test_no_findings_from_clean_response(self):
         agent = _make_agent()
         response = "No vulnerabilities found. The code looks clean."
         agent._extract_and_register_findings(response, "Analysis")
         self.assertEqual(len(agent.session.findings), 0)
+
+    def test_multiple_findings_in_list(self):
+        import json
+        agent = _make_agent()
+        findings = [
+            {
+                "title": "Bug A", "severity": "High", "category": "SQLi",
+                "file_path": "app.py", "line_number": 10,
+                "vulnerable_snippet": "cursor.execute(user_input)",
+                "confidence": 80, "status": "DRAFT",
+            },
+            {
+                "title": "Bug B", "severity": "Medium", "category": "XSS",
+                "file_path": "app.py", "line_number": 25,
+                "vulnerable_snippet": "document.write(data)",
+                "confidence": 75, "status": "DRAFT",
+            },
+        ]
+        response = f"```json\n{json.dumps(findings)}\n```"
+        agent._extract_and_register_findings(response, "Analysis")
+        self.assertEqual(len(agent.session.findings), 2)
 
 
 class TestHelperMethods(unittest.TestCase):
@@ -237,7 +317,7 @@ class TestHelperMethods(unittest.TestCase):
     def test_get_all_findings_detailed_empty(self):
         agent = _make_agent()
         result = agent._get_all_findings_detailed()
-        self.assertIn("No findings", result)
+        self.assertIn("No reportable findings", result)
 
     def test_determine_next_action_recon(self):
         agent = _make_agent()

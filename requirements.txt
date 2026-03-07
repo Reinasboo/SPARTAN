@@ -12,5 +12,12 @@ rich>=13.0.0            # Enhanced terminal formatting (optional)
 # ── YAML config support ───────────────────────────────────────────────────────
 pyyaml>=6.0             # YAML audit config files (--config flag)
 
+# ── Async HTTP (parallel OWASP agents) ───────────────────────────────────────
+aiohttp>=3.9.0          # Used by parallel async OWASP agent runners
+
 # ── Browser-based PoC generation (optional) ──────────────────────────────────
 # playwright>=1.40.0    # Uncomment + run: playwright install chromium
+
+# ── Static analysis tools (optional — install separately) ────────────────────
+# semgrep                # pip install semgrep  (or brew install semgrep)
+# slither-analyzer       # pip install slither-analyzer  (Solidity only)

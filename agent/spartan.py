@@ -5,6 +5,7 @@ Orchestrates phases, session memory, LLM interactions, and response formatting.
 
 from __future__ import annotations
 
+import json as _json
 import re
 from typing import Any
 
@@ -50,7 +51,11 @@ class SpartanAgent:
     def __init__(self, session: Session | None = None):
         self.session = session or Session()
         self._pending_auth_check = False
-        self.audit_config = None  # Optional AuditConfig loaded from YAML
+        self.audit_config = None          # Optional AuditConfig loaded from YAML
+        self._github_source_cache: str = ""   # ephemeral: cleared after analysis
+        self._scanner_cache: str = ""         # ephemeral: cleared after analysis
+        self._confidence_threshold: int = 60  # min confidence for report inclusion
+        self._platform: str = "general"       # report platform target
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -218,13 +223,21 @@ class SpartanAgent:
             system = build_analysis_system_prompt()
             attack_surface = self._get_last_recon_summary()
             is_web3 = _detect_web3(self.session.target + " " + user_input)
+            # Combine user input with any cached GitHub/scanner source
+            combined_context = user_input
+            if self._github_source_cache:
+                combined_context = self._github_source_cache + "\n\n" + combined_context
+                self._github_source_cache = ""  # consume once
+            if self._scanner_cache:
+                combined_context = self._scanner_cache + "\n\n" + combined_context
+                self._scanner_cache = ""  # consume once
             user_prompt = build_analysis_prompt(
                 target=self.session.target,
                 attack_surface_summary=attack_surface,
-                context=user_input,
+                context=combined_context,
                 include_web2=not is_web3,
                 include_web3=is_web3,
-                source_code=user_input if len(user_input) > 200 else None,
+                source_code=combined_context if len(combined_context) > 200 else None,
             )
         elif phase == "Validation":
             system = build_validation_system_prompt()
@@ -262,13 +275,16 @@ class SpartanAgent:
         """Run Phase 4 — Report Generation."""
         print(spartan_header(self.session.target, "Report"), end="")
 
-        findings_text = self._get_all_findings_detailed()
+        findings_text = self._get_all_findings_detailed(
+            min_confidence=self._confidence_threshold
+        )
         user_prompt = build_report_prompt(
             target=self.session.target,
             session_id=self.session.session_id,
             all_findings_text=findings_text,
+            platform=self._platform,
         )
-        system = build_report_system_prompt()
+        system = build_report_system_prompt(self._platform)
 
         response = self._llm_call(system, user_prompt)
         self.session.add_message("assistant", response)
@@ -343,43 +359,130 @@ class SpartanAgent:
 
     # ── Finding management ────────────────────────────────────────────────────
 
+    # ── Semantic deduplication helpers ────────────────────────────────────────
+
+    @staticmethod
+    def _jaccard(a: str, b: str) -> float:
+        """Jaccard similarity between two strings based on word sets."""
+        set_a = set(re.findall(r"\w+", a.lower()))
+        set_b = set(re.findall(r"\w+", b.lower()))
+        if not set_a or not set_b:
+            return 0.0
+        return len(set_a & set_b) / len(set_a | set_b)
+
+    def _is_duplicate(self, title: str, file_path: str, line_number: int) -> bool:
+        """
+        Return True if an equivalent finding already exists.
+        Same file+line = definite dup. Jaccard similarity >= 0.7 = likely dup.
+        """
+        for f in self.session.findings:
+            if file_path and f.file_path == file_path and line_number and f.line_number == line_number:
+                return True
+            if self._jaccard(title, f.title) >= 0.70:
+                return True
+        return False
+
     def _extract_and_register_findings(self, response: str, phase: str) -> None:
         """
-        Heuristically extract findings from LLM response and register them in session.
+        Extract structured JSON findings from LLM response and register them.
+
+        P0 rules:
+        - Finding must be inside a ```json block
+        - Must have file_path OR vulnerable_snippet OR line_number (evidence required)
+        - status == "CONFIRMED" only if LLM says so AND has evidence
+        - Each CONFIRMED finding runs a devil's advocate check
+        - Semantic deduplication via Jaccard similarity
+        - CVSS mismatch (|computed - claimed| > 1.0) → NEEDS_REVIEW flag
         """
-        # Look for "Potential Finding:" or "## [FINDING" patterns
-        patterns = [
-            r"(?:Potential Finding|###\s*Potential Finding):\s*(.+?)(?:\n|$)",
-            r"\[FINDING-\d+\]\s*[—-]\s*(.+?)(?:\n|$)",
-        ]
+        # Parse all JSON blocks from the LLM response
+        json_blocks = re.findall(r"```json\s*\n(.*?)\n```", response, re.DOTALL)
 
-        severity_pattern = re.compile(
-            r"(?:Severity|Preliminary Severity):\s*(Critical|High|Medium|Low|Informational|Gas)",
-            re.IGNORECASE,
-        )
-        category_pattern = re.compile(
-            r"(?:Class|Category|CWE):\s*(.+?)(?:\n|$)",
-            re.IGNORECASE,
-        )
+        for raw_block in json_blocks:
+            try:
+                data = _json.loads(raw_block)
+            except _json.JSONDecodeError:
+                continue
 
-        severities  = severity_pattern.findall(response)
-        categories  = category_pattern.findall(response)
-        confirmed   = "[UNCONFIRMED" not in response
+            # Support both a single finding dict and a list of findings
+            candidates: list[dict] = data if isinstance(data, list) else [data]
 
-        for pattern in patterns:
-            titles = re.findall(pattern, response)
-            for i, title in enumerate(titles):
-                title = title.strip()
+            for fd in candidates:
+                if not isinstance(fd, dict):
+                    continue
+
+                title = str(fd.get("title", "")).strip()
                 if not title or len(title) > 150:
                     continue
 
-                # Skip if already registered
-                existing_titles = [f.title for f in self.session.findings]
-                if title in existing_titles:
+                # ── Evidence gate (P0) ──────────────────────────────────
+                file_path        = str(fd.get("file_path", "")).strip()
+                line_number      = int(fd.get("line_number") or 0)
+                vuln_snippet     = str(fd.get("vulnerable_snippet", "")).strip()
+                has_evidence     = bool(file_path or vuln_snippet or line_number)
+
+                if not has_evidence:
+                    # No grounding → silently discard (anti-hallucination)
                     continue
 
-                severity = severities[i] if i < len(severities) else "Medium"
-                category = categories[i].strip() if i < len(categories) else "Unknown"
+                # ── Semantic dedup (P3) ─────────────────────────────────
+                if self._is_duplicate(title, file_path, line_number):
+                    continue
+
+                # ── Normalise fields ────────────────────────────────────
+                raw_severity = str(fd.get("severity", "Medium")).strip().capitalize()
+                severity = raw_severity if raw_severity in (
+                    "Critical", "High", "Medium", "Low", "Informational", "Gas"
+                ) else "Medium"
+
+                category             = str(fd.get("category", "Unknown")).strip()
+                attack_prerequisite  = str(fd.get("attack_prerequisite", "")).strip()
+                impact_justification = str(fd.get("impact_justification", "")).strip()
+                confidence           = max(0, min(100, int(fd.get("confidence") or 0)))
+                cvss_score           = float(fd.get("cvss_score") or 0.0)
+                cvss_vector          = str(fd.get("cvss_vector", "")).strip()
+                poc                  = str(fd.get("poc", "")).strip()
+                summary              = impact_justification or str(fd.get("summary", "")).strip()
+
+                # ── Confirmed logic fix (P0) ────────────────────────────
+                # CONFIRMED only if LLM explicitly says so AND evidence exists
+                llm_status = str(fd.get("status", "DRAFT")).strip().upper()
+                if llm_status == "CONFIRMED" and has_evidence:
+                    status = "CONFIRMED"
+                elif llm_status == "REJECTED":
+                    status = "REJECTED"
+                else:
+                    status = "DRAFT"
+
+                # ── CVSS recomputation mismatch flag (P1) ───────────────
+                if cvss_score > 0.0 and cvss_vector:
+                    computed = _estimate_cvss_from_vector(cvss_vector)
+                    if computed is not None and abs(computed - cvss_score) > 1.0:
+                        status = "NEEDS_REVIEW"  # flag for human review
+
+                # ── Devil's advocate check for CONFIRMED findings (P0) ──
+                rejection_reason = ""
+                if status == "CONFIRMED":
+                    from agent.tools.devil_advocate import devil_advocate_check
+                    verdict = devil_advocate_check(
+                        title=title,
+                        severity=severity,
+                        category=category,
+                        file_path=file_path,
+                        line_number=line_number,
+                        vulnerable_snippet=vuln_snippet,
+                        attack_prerequisite=attack_prerequisite,
+                        impact_justification=impact_justification,
+                        source_context=self._get_last_source_context(),
+                    )
+                    if verdict.verdict == "REJECTED":
+                        status = "REJECTED"
+                        rejection_reason = f"Devil's advocate: {verdict.reason}"
+                    elif verdict.verdict == "NEEDS_MORE_EVIDENCE":
+                        status = "DRAFT"
+                        rejection_reason = f"Needs more evidence: {verdict.reason}"
+                    # Update confidence with devil's advocate own confidence
+                    if verdict.confidence > 0 and status == "CONFIRMED":
+                        confidence = max(confidence, verdict.confidence)
 
                 fid = self.session.next_finding_id()
                 finding = Finding(
@@ -388,11 +491,30 @@ class SpartanAgent:
                     severity=severity,
                     category=category,
                     target=self.session.target,
-                    confirmed=confirmed,
+                    summary=summary,
+                    cvss_score=cvss_score,
+                    cvss_vector=cvss_vector,
+                    confirmed=(status == "CONFIRMED"),
+                    poc=poc,
                     phase_found=phase,
-                    raw_report=response[:500],  # store excerpt
+                    raw_report=response[:500],
+                    file_path=file_path,
+                    line_number=line_number,
+                    vulnerable_snippet=vuln_snippet,
+                    attack_prerequisite=attack_prerequisite,
+                    impact_justification=impact_justification,
+                    confidence=confidence,
+                    status=status,
+                    rejection_reason=rejection_reason,
                 )
                 self.session.add_finding(finding)
+
+    def _get_last_source_context(self) -> str:
+        """Return the most recent user-provided source code context for devil's advocate."""
+        for msg in reversed(self.session.messages):
+            if msg["role"] == "user" and len(msg["content"]) > 300:
+                return msg["content"][:2000]
+        return ""
 
     def register_finding_manually(
         self,
@@ -476,23 +598,40 @@ class SpartanAgent:
             )
         return "\n".join(lines)
 
-    def _get_all_findings_detailed(self) -> str:
-        """Return detailed findings text for report generation."""
-        if not self.session.findings:
-            return "(No findings recorded — generate from conversation context)"
+    def _get_all_findings_detailed(self, min_confidence: int = 0) -> str:
+        """Return detailed findings text for report generation.
+
+        Only includes findings with confidence >= min_confidence and
+        status not REJECTED.
+        """
+        reportable = [
+            f for f in self.session.findings
+            if f.status != "REJECTED" and f.confidence >= min_confidence
+        ]
+        if not reportable:
+            return "(No reportable findings — check confidence threshold or generate from conversation context)"
         lines = []
-        for f in self.session.findings:
+        for f in reportable:
+            conf_tier = (
+                "CONFIRMED" if f.confidence >= 85 else
+                "NEEDS_VERIFICATION" if f.confidence >= 60 else
+                "LOW_CONFIDENCE"
+            )
             lines.append(
                 f"### {f.finding_id}: {f.title}\n"
                 f"Severity: {f.severity}\n"
                 f"Category: {f.category}\n"
                 f"Target: {f.target}\n"
+                f"File: {f.file_path} line {f.line_number}\n"
                 f"CVSS: {f.cvss_score} {f.cvss_vector}\n"
+                f"Status: {f.status} | Confidence: {f.confidence}% ({conf_tier})\n"
                 f"Confirmed: {f.confirmed}\n"
                 f"Summary: {f.summary}\n"
+                f"Vulnerable Snippet: {f.vulnerable_snippet}\n"
+                f"Attack Prerequisite: {f.attack_prerequisite}\n"
+                f"Impact: {f.impact_justification}\n"
                 f"PoC: {f.poc}\n"
                 f"Phase: {f.phase_found}\n"
-                f"Raw: {f.raw_report[:300]}\n"
             )
         return "\n\n".join(lines)
 
@@ -599,3 +738,103 @@ class SpartanAgent:
         if session:
             return cls(session)
         return None
+
+    def inject_github_source(self, github_url: str) -> str:
+        """
+        Fetch source files from a GitHub repo and store them as context.
+        Returns a summary string. Source is prepended to the next analysis prompt.
+        """
+        from agent.tools.github_fetcher import fetch_github_repo, is_github_url
+        if not is_github_url(github_url):
+            return f"Not a recognisable GitHub URL: {github_url}"
+        result = fetch_github_repo(github_url)
+        if result.error:
+            return f"GitHub fetch failed: {result.error}"
+        # Store source as a session note so analysis phase can pick it up
+        from agent.tools.code_chunker import chunk_source_dict, chunks_to_prompt
+        chunks = chunk_source_dict(result.files)
+        context_block = chunks_to_prompt(chunks, max_chars=30_000)
+        summary = result.summary()
+        self.session.notes.append(f"[GITHUB SOURCE]\n{summary}\n\n{context_block}")
+        self._github_source_cache = context_block  # ephemeral cache
+        return summary
+
+    def run_scanner_on_source(self, source_path: str) -> str:
+        """
+        Run semgrep/slither on a local path and inject findings as analysis context.
+        Returns a human-readable summary.
+        """
+        from agent.tools.scanner import scan_source
+        result = scan_source(source_path)
+        context = result.to_context_string()
+        if result.has_findings:
+            self.session.notes.append(f"[SCANNER PRE-SCAN]\n{context}")
+            self._scanner_cache = context
+        tools = ", ".join(result.tools_run) if result.tools_run else "none"
+        skipped = ", ".join(result.skipped) if result.skipped else "none"
+        return (
+            f"Scanner run: {len(result.findings)} findings | "
+            f"tools: {tools} | skipped: {skipped}"
+        )
+
+
+# ── Module-level CVSS helpers ─────────────────────────────────────────────────
+
+# Simplified AV/AC/PR/UI/S/C/I/A scoring table (CVSS v3.1 numerics)
+_CVSS_AV   = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.20}
+_CVSS_AC   = {"L": 0.77, "H": 0.44}
+_CVSS_PR   = {"N": 0.85, "L": 0.62, "H": 0.27}
+_CVSS_PR_S = {"N": 0.85, "L": 0.68, "H": 0.50}   # scope changed
+_CVSS_UI   = {"N": 0.85, "R": 0.62}
+_CVSS_CIA  = {"N": 0.00, "L": 0.22, "H": 0.56}
+_CVSS_SCOPE_CHANGED = "C"
+
+
+def _estimate_cvss_from_vector(vector: str) -> float | None:
+    """
+    Compute an approximate CVSS v3.1 base score from an AV:../AC:../...
+    vector string. Returns None if the vector cannot be parsed.
+    """
+    try:
+        parts: dict[str, str] = {}
+        for segment in vector.split("/"):
+            if ":" in segment:
+                k, v = segment.split(":", 1)
+                parts[k.upper()] = v.upper()
+
+        av = _CVSS_AV.get(parts.get("AV", ""), None)
+        ac = _CVSS_AC.get(parts.get("AC", ""), None)
+        scope = parts.get("S", "U")
+        pr_table = _CVSS_PR_S if scope == _CVSS_SCOPE_CHANGED else _CVSS_PR
+        pr = pr_table.get(parts.get("PR", ""), None)
+        ui = _CVSS_UI.get(parts.get("UI", ""), None)
+        c  = _CVSS_CIA.get(parts.get("C", ""), None)
+        i  = _CVSS_CIA.get(parts.get("I", ""), None)
+        a  = _CVSS_CIA.get(parts.get("A", ""), None)
+
+        if any(x is None for x in (av, ac, pr, ui, c, i, a)):
+            return None
+
+        iss = 1.0 - (1.0 - c) * (1.0 - i) * (1.0 - a)
+        if scope == "U":
+            impact = 6.42 * iss
+        else:
+            impact = 7.52 * (iss - 0.029) - 3.25 * ((iss - 0.02) ** 15)
+
+        exploitability = 8.22 * av * ac * pr * ui
+
+        if impact <= 0:
+            return 0.0
+
+        if scope == "U":
+            score = min(impact + exploitability, 10)
+        else:
+            score = min(1.08 * (impact + exploitability), 10)
+
+        # Roundup to 1 decimal
+        import math
+        score = math.ceil(score * 10) / 10
+        return round(score, 1)
+    except Exception:
+        return None
+

@@ -207,14 +207,17 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                                       # Interactive mode
-  python main.py --target "VaultContract"              # Start with a target
-  python main.py --target "..." --file contract.sol    # With source file
-  python main.py --config audit-config.yaml            # Load YAML config
-  python main.py --config audit-config.yaml --target " " # Config + override target
-  python main.py --sessions                            # List all sessions
-  python main.py --load <session-id>                   # Resume a session
-  python main.py --load <session-id> --config cfg.yaml # Resume + load config
+  python main.py                                            # Interactive mode
+  python main.py --target "VaultContract"                  # Start with a target
+  python main.py --target "..." --file contract.sol        # With source file
+  python main.py --target "..." --file contract.sol --semgrep   # Run semgrep first
+  python main.py --github https://github.com/org/repo      # Auto-fetch GitHub source
+  python main.py --platform immunefi --github https://...  # Immunefi submission format
+  python main.py --platform code4rena --confidence 75      # Code4rena with confidence gate
+  python main.py --config audit-config.yaml                # Load YAML config
+  python main.py --sessions                                # List all sessions
+  python main.py --load <session-id>                       # Resume a session
+  python main.py --load <session-id> --config cfg.yaml     # Resume + load config
         """,
     )
     parser.add_argument(
@@ -258,6 +261,29 @@ Examples:
         "--config", "-c",
         metavar="CONFIG_YAML",
         help="Path to YAML audit config file (scope, auth, rules, pipeline)",
+    )
+    parser.add_argument(
+        "--github", "-g",
+        metavar="GITHUB_URL",
+        help="GitHub repo URL to auto-fetch source files (e.g. https://github.com/org/repo)",
+    )
+    parser.add_argument(
+        "--platform",
+        choices=["immunefi", "hackerone", "code4rena", "internal", "general"],
+        default="general",
+        help="Report platform format (immunefi/hackerone/code4rena/internal/general)",
+    )
+    parser.add_argument(
+        "--semgrep",
+        action="store_true",
+        help="Run semgrep/slither static analysis on --file before analysis phase",
+    )
+    parser.add_argument(
+        "--confidence",
+        metavar="THRESHOLD",
+        type=int,
+        default=60,
+        help="Minimum confidence (0-100) to include findings in report (default: 60)",
     )
 
     args = parser.parse_args()
@@ -315,6 +341,10 @@ Examples:
 
     agent = SpartanAgent.new_session(target=target)
 
+    # Apply new 10x flags
+    agent._platform = getattr(args, "platform", "general") or "general"
+    agent._confidence_threshold = getattr(args, "confidence", 60)
+
     # Load YAML audit config if provided
     if args.config:
         result = agent.load_config_file(args.config)
@@ -325,7 +355,18 @@ Examples:
 
     # If context file provided with target, auto-start recon
     if target != "unset" and context:
+        # Run static analysis pre-scan if requested
+        if args.semgrep and args.file:
+            print(f"Running static analysis on: {args.file}")
+            scan_summary = agent.run_scanner_on_source(args.file)
+            print(f"Scanner: {scan_summary}")
         agent.process_input(f"Begin security audit of {target}.\n\nSource code:\n{context[:8000]}")
+
+    # GitHub source auto-fetch
+    if args.github:
+        print(f"Fetching GitHub source: {args.github}")
+        gh_summary = agent.inject_github_source(args.github)
+        print(f"GitHub: {gh_summary}")
 
     run_interactive(agent)
 

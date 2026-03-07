@@ -238,6 +238,26 @@ class TestBuildReportPrompt(unittest.TestCase):
         self.assertIsInstance(sp, str)
         self.assertGreater(len(sp), 50)
 
+    def test_system_prompt_with_platform(self):
+        for platform in ("immunefi", "hackerone", "code4rena", "general"):
+            sp = build_report_system_prompt(platform)
+            self.assertIsInstance(sp, str)
+            self.assertGreater(len(sp), 50)
+
+    def test_platform_injected_in_prompt(self):
+        prompt = build_report_prompt(
+            target="MySmartContract",
+            session_id="abc12345",
+            all_findings_text="### FINDING-001: Reentrancy",
+            platform="immunefi",
+        )
+        self.assertIn("IMMUNEFI", prompt)
+
+    def test_json_output_instruction_in_analysis(self):
+        from agent.phases.analysis import JSON_OUTPUT_INSTRUCTION
+        self.assertIn("json", JSON_OUTPUT_INSTRUCTION.lower())
+        self.assertIn("file_path", JSON_OUTPUT_INSTRUCTION)
+
 
 # ── Remediation Phase ─────────────────────────────────────────────────────────
 

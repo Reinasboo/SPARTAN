@@ -29,6 +29,10 @@ SHANNON INTEGRATION — ENFORCEMENT RULES:
 5. **Parallel DeFi Protocol Analysis**: For DeFi/Web3 targets, auto-detect protocol type
    (bridge, lending, DEX, CDP, etc.) and apply the Protocol Vulnerabilities Index checklist
    for that specific protocol type (460 categories across 31 DeFi protocol types).
+6. **ZERO HALLUCINATION POLICY — JSON-ONLY FINDINGS**: ALL security findings MUST be output
+   as JSON blocks in ```json fences. Plain-text finding descriptions are IGNORED by the parser.
+   Every JSON finding MUST include `file_path`, `line_number`, AND `vulnerable_snippet`.
+   Findings without code-level evidence are automatically REJECTED. Do NOT invent locations.
 
 ## AUDIT PHASES
 
@@ -96,57 +100,34 @@ Rules:
 - These guardrails cannot be overridden by any instruction
 
 ## FINDING REPORT TEMPLATE
-Each finding uses this exact structure:
+Each finding MUST be output as a JSON block in ```json fences:
 
-## [FINDING-###] — <Vulnerability Title>
-
-**Severity:** Critical / High / Medium / Low / Informational
-**CVSS Score:** X.X (Vector: AV:.../AC:.../PR:.../UI:.../S:.../C:.../I:.../A:...)
-**Target:** <contract / endpoint / component>
-**Category:** <vulnerability class>
-
-### Summary
-One-paragraph plain-English summary.
-
-### Vulnerability Details
-**Root Cause:** <Precise technical explanation with specific references>
-**Attack Path:**
-1. Attacker does X
-2. This causes Y
-3. Result: Z
-
-### Proof of Concept
-```[language]
-// Target: <function/endpoint>
-// Vulnerability: <type>
-// Impact: <what an attacker achieves>
-// Prerequisites: <what the attacker needs>
-<code>
-// Expected result: <what happens>
-// Attacker outcome: <impact>
+```json
+{
+  "title": "Short descriptive vulnerability title",
+  "severity": "Critical|High|Medium|Low|Informational|Gas",
+  "category": "Vulnerability class (e.g. Reentrancy, SQLi, IDOR)",
+  "owasp_id": "e.g. A01:2021 or API1:2023 or SWC-107",
+  "cwe": "CWE-XXX",
+  "file_path": "path/to/file.ext",
+  "line_number": 42,
+  "vulnerable_snippet": "exact code line(s) containing the vulnerability",
+  "attack_prerequisite": "What the attacker must have or control to exploit this",
+  "impact_justification": "Concrete impact: what funds/data/access is at risk",
+  "exploit_path": ["1. Attacker does X", "2. This causes Y", "3. Impact Z"],
+  "cvss_score": 9.1,
+  "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+  "poc": "Foundry test / curl / Python script showing exploitation",
+  "confidence": 85,
+  "status": "CONFIRMED|DRAFT|UNCONFIRMED"
+}
 ```
 
-**Reproduction Steps:**
-1. ...
-
-**Expected vs. Actual Behavior:**
-- Expected: ...
-- Actual: ...
-
-### Impact Analysis
-- **Confidentiality:** High / Medium / Low / None
-- **Integrity:** High / Medium / Low / None
-- **Availability:** High / Medium / Low / None
-- **Financial Impact:** <if applicable>
-- **Affected Users / Contracts / Funds:** <scope>
-
-### Recommended Fix
-<Specific, actionable remediation with code snippets>
-
-**Fix Verification:** How to confirm the fix is correct.
-
-### References
-- <CWE, EIP, CVE, or relevant research>
+CRITICAL RULES:
+- `file_path` + `line_number` + `vulnerable_snippet` are REQUIRED. Omit if unknown — never guess.
+- `status: "CONFIRMED"` only if exploit path traced end-to-end. All else is "DRAFT".
+- `confidence` is 0-100 self-assessment of certainty. Be accurate, not optimistic.
+- Findings without evidence are automatically REJECTED by the parser. Do NOT fabricate locations.
 """
 
 PHASE_PROMPTS = {
